@@ -2,18 +2,30 @@ import { makeWASocket, useMultiFileAuthState, DisconnectReason, downloadContentF
 import { Boom } from "@hapi/boom";
 import fs from "fs";
 import path from "path";
-import qrcode from "qrcode-terminal";
+import qrcode from "qrcode";
+import qrcodeTerminal from "qrcode-terminal";
 import figlet from "figlet";
 import chalk from "chalk";
 import { fileURLToPath } from "url";
+import express from "express";
 
 // Get directory name in ESM
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+// Check if running on Render
+const isRender = process.env.RENDER === 'true';
+const PORT = process.env.PORT || 3000;
+
+// Base directory for storage
+const BASE_DIR = isRender 
+  ? '/opt/render/project/src/data' 
+  : __dirname;
+
 // Create necessary directories
-const MEDIA_DIR = path.join(__dirname, "media");
-const SAVED_MEDIA_DIR = path.join(__dirname, "saved_media");
-const AUTH_DIR = path.join(__dirname, "auth");
+const MEDIA_DIR = path.join(BASE_DIR, "media");
+const SAVED_MEDIA_DIR = path.join(BASE_DIR, "saved_media");
+const AUTH_DIR = path.join(BASE_DIR, "auth");
+const DB_FILE = path.join(BASE_DIR, "bot_db.json");
 
 [MEDIA_DIR, SAVED_MEDIA_DIR, AUTH_DIR].forEach(dir => {
   if (!fs.existsSync(dir)) {
@@ -21,8 +33,84 @@ const AUTH_DIR = path.join(__dirname, "auth");
   }
 });
 
-// Database configuration
-const DB_FILE = path.join(__dirname, "bot_db.json");
+// Initialize Express server
+const app = express();
+
+// Serve the QR code
+app.get('/qr', (req, res) => {
+  const qrPath = path.join(MEDIA_DIR, 'latest-qr.png');
+  
+  if (fs.existsSync(qrPath)) {
+    res.sendFile(qrPath);
+  } else {
+    res.status(404).send('QR code not generated yet. Please check back in a few moments.');
+  }
+});
+
+// Serve QR URL as text
+app.get('/qr-text', (req, res) => {
+  const qrUrlPath = path.join(MEDIA_DIR, 'qr-url.txt');
+  
+  if (fs.existsSync(qrUrlPath)) {
+    const qrUrl = fs.readFileSync(qrUrlPath, 'utf8');
+    res.send(qrUrl);
+  } else {
+    res.status(404).send('QR code URL not generated yet. Please check back in a few moments.');
+  }
+});
+
+// Simple status endpoint
+app.get('/', (req, res) => {
+  res.send(`
+    <html>
+      <head>
+        <title>WhatsApp Bot Status</title>
+        <style>
+          body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+          h1 { color: #075e54; }
+          .status { padding: 15px; border-radius: 5px; margin-bottom: 20px; }
+          .online { background-color: #dcf8c6; }
+          .offline { background-color: #f8dcdc; }
+          .qr-section { margin-top: 30px; }
+          .button { display: inline-block; background-color: #075e54; color: white; padding: 10px 15px; 
+                   text-decoration: none; border-radius: 5px; margin-right: 10px; }
+        </style>
+      </head>
+      <body>
+        <h1>WhatsApp Bot Status</h1>
+        <div class="status ${global.botStatus === 'connected' ? 'online' : 'offline'}">
+          Status: ${global.botStatus === 'connected' ? 'Online' : 'Waiting for connection...'}
+        </div>
+        
+        <div class="qr-section">
+          <h2>Authentication</h2>
+          ${global.botStatus === 'connected' 
+            ? '<p>Bot is authenticated and running!</p>' 
+            : '<p>Scan the QR code to authenticate your WhatsApp:</p><img src="/qr" alt="QR Code" />'}
+        </div>
+        
+        <div style="margin-top: 30px;">
+          <a href="/qr" class="button">View QR Code</a>
+          <a href="/qr-text" class="button">Get QR URL</a>
+        </div>
+      </body>
+    </html>
+  `);
+});
+
+// Start the server
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+  if (isRender) {
+    console.log(`Access your bot status at your-app-url.onrender.com`);
+    console.log(`Access QR code at your-app-url.onrender.com/qr`);
+  } else {
+    console.log(`Access your bot status at http://localhost:${PORT}`);
+    console.log(`Access QR code at http://localhost:${PORT}/qr`);
+  }
+});
+
+// Database setup
 let db = { warned: {}, statuses: {}, quotes: {} };
 
 // Load database if exists
@@ -36,7 +124,11 @@ if (fs.existsSync(DB_FILE)) {
 
 // Save database
 function saveDB() {
-  fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
+  try {
+    fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
+  } catch (error) {
+    logger("error", `Failed to save database: ${error.message}`);
+  }
 }
 
 // Fancy console log
@@ -56,6 +148,23 @@ function logger(type, message) {
   };
   
   console.log(`[${timestamp}] ${typeColors[type] ? typeColors[type](type.toUpperCase()) : type}: ${message}`);
+}
+
+// Function to save QR code as an image
+async function saveQRCodeImage(qr) {
+  try {
+    const qrImagePath = path.join(MEDIA_DIR, 'latest-qr.png');
+    await qrcode.toFile(qrImagePath, qr);
+    logger("info", `QR Code saved to ${qrImagePath}`);
+    
+    // Also save QR as URL that can be opened in browser
+    const qrUrl = await qrcode.toDataURL(qr);
+    fs.writeFileSync(path.join(MEDIA_DIR, 'qr-url.txt'), qrUrl);
+    
+    logger("info", "QR Code saved as image and URL");
+  } catch (error) {
+    logger("error", `Failed to save QR code: ${error.message}`);
+  }
 }
 
 // Helper to download media from message
@@ -530,188 +639,246 @@ async function sendViewOnceMessage(sock, jid, mediaPath, caption, type = 'image'
   }
 }
 
+// Global bot status
+global.botStatus = 'waiting';
+
 // Main bot function
 async function startBot() {
-  // Create auth state
-  const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
+  try {
+    // Create auth state
+    const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
 
-  // Create socket connection
-  const sock = makeWASocket({
-    auth: state,
-    printQRInTerminal: true,
-    defaultQueryTimeoutMs: 60000, // Increase timeout for slow connections
-    qrTimeout: 60000, // Add this line to increase QR code timeout
-  });
+    // Create socket connection
+    const sock = makeWASocket({
+      auth: state,
+      printQRInTerminal: true,
+      defaultQueryTimeoutMs: 60000, // Increase timeout for slow connections
+      qrTimeout: 60000, // Add this line to increase QR code timeout
+    });
 
-  // Save credentials when updated
-  sock.ev.on("creds.update", saveCreds);
+    // Save credentials when updated
+    sock.ev.on("creds.update", saveCreds);
 
-  // Handle connection updates
-  sock.ev.on("connection.update", ({ connection, lastDisconnect, qr }) => {
-    if (qr) {
-      qrcode.generate(qr, { small: true }); // Generate smaller QR code
-      logger("info", "QR Code generated. Scan with your phone!");
-    }
-    
-    if (connection === "close") {
-      const shouldReconnect =
-        lastDisconnect?.error instanceof Boom && 
-        lastDisconnect.error.output?.statusCode !== DisconnectReason.loggedOut;
-
-      logger("warning", `Connection closed due to ${lastDisconnect?.error?.message || "unknown error"}`);
-      logger("info", `Reconnecting: ${shouldReconnect}`);
-
-      if (shouldReconnect) {
-        startBot();
+    // Handle connection updates
+    sock.ev.on("connection.update", async ({ connection, lastDisconnect, qr }) => {
+      if (qr) {
+        // Generate terminal QR code
+        qrcodeTerminal.generate(qr, { small: true });
+        
+        // Save QR code as image and URL
+        await saveQRCodeImage(qr);
+        
+        logger("info", "QR Code generated. Scan with your phone!");
+        global.botStatus = 'waiting';
       }
-    } else if (connection === "open") {
-      fancyLog("Bot Connected!");
-      logger("success", `Logged in as ${sock.user?.name || sock.user?.id || "Unknown"}`);
-    }
-  });
+      
+      if (connection === "close") {
+        const shouldReconnect =
+          lastDisconnect?.error instanceof Boom && 
+          lastDisconnect.error.output?.statusCode !== DisconnectReason.loggedOut;
 
-  // Handle messages
-  sock.ev.on("messages.upsert", async ({ messages, type }) => {
-    try {
-      const msg = messages[0];
-      if (!msg.message) return;
+        logger("warning", `Connection closed due to ${lastDisconnect?.error?.message || "unknown error"}`);
+        logger("info", `Reconnecting: ${shouldReconnect}`);
+        global.botStatus = 'disconnected';
 
-      const from = msg.key.remoteJid;
-      const isGroup = from.endsWith("@g.us");
-      const sender = msg.key.participant || from;
-
-      // Get message content
-      const messageType = Object.keys(msg.message)[0];
-      const body = (
-        msg.message.conversation ||
-        msg.message.extendedTextMessage?.text ||
-        msg.message.imageMessage?.caption ||
-        msg.message.videoMessage?.caption ||
-        ""
-      ).trim();
-
-      // Check for status save command
-      if (body.toLowerCase() === "!save" && msg.message.extendedTextMessage?.contextInfo?.quotedMessage) {
-        const quotedMsg = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
-        const quotedMsgId = msg.message.extendedTextMessage?.contextInfo?.stanzaId;
-        const quotedJid = msg.message.extendedTextMessage?.contextInfo?.participant;
+        if (shouldReconnect) {
+          setTimeout(() => {
+            logger("info", "Attempting to reconnect...");
+            startBot();
+          }, 5000); // Wait 5 seconds before reconnecting
+        }
+      } else if (connection === "open") {
+        fancyLog("Bot Connected!");
+        logger("success", `Logged in as ${sock.user?.name || sock.user?.id || "Unknown"}`);
+        global.botStatus = 'connected';
         
-        // Generate a unique filename
-        const fileName = `${Date.now()}_${sender.split('@')[0]}`;
-        
-        // Download the media
-        const mediaInfo = await downloadMedia({
-          key: {
-            remoteJid: quotedJid,
-            id: quotedMsgId
-          },
-          message: quotedMsg
-        }, fileName);
-        
-        if (mediaInfo) {
-          // Send confirmation
-          await sock.sendMessage(from, { text: `✅ Media saved successfully!` }, { quoted: msg });
+        // Delete QR code after successful connection
+        try {
+          const qrPath = path.join(MEDIA_DIR, 'latest-qr.png');
+          if (fs.existsSync(qrPath)) {
+            fs.unlinkSync(qrPath);
+          }
+        } catch (error) {
+          logger("warning", `Failed to delete QR code: ${error.message}`);
+        }
+      }
+    });
+
+    // Handle messages
+    sock.ev.on("messages.upsert", async ({ messages, type }) => {
+      try {
+        const msg = messages[0];
+        if (!msg.message) return;
+
+        const from = msg.key.remoteJid;
+        const isGroup = from.endsWith("@g.us");
+        const sender = msg.key.participant || from;
+
+        // Get message content
+        const messageType = Object.keys(msg.message)[0];
+        const body = (
+          msg.message.conversation ||
+          msg.message.extendedTextMessage?.text ||
+          msg.message.imageMessage?.caption ||
+          msg.message.videoMessage?.caption ||
+          ""
+        ).trim();
+
+        // Check for status save command
+        if (body.toLowerCase() === "!save" && msg.message.extendedTextMessage?.contextInfo?.quotedMessage) {
+          const quotedMsg = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+          const quotedMsgId = msg.message.extendedTextMessage?.contextInfo?.stanzaId;
+          const quotedJid = msg.message.extendedTextMessage?.contextInfo?.participant;
           
-          // Send the media back to the user
-          const mediaType = mediaInfo.messageType;
-          const mediaPath = mediaInfo.filePath;
+          // Generate a unique filename
+          const fileName = `${Date.now()}_${sender.split('@')[0]}`;
           
-          if (mediaType === "image") {
-            await sock.sendMessage(from, { 
-              image: { url: mediaPath },
-              caption: "Here's your saved image!"
-            });
-          } else if (mediaType === "video") {
-            await sock.sendMessage(from, { 
-              video: { url: mediaPath },
-              caption: "Here's your saved video!"
-            });
-          } else if (mediaType === "audio") {
-            await sock.sendMessage(from, { 
-              audio: { url: mediaPath },
-              mimetype: mediaInfo.mimetype
-            });
-          } else if (mediaType === "document") {
-            await sock.sendMessage(from, { 
-              document: { url: mediaPath },
-              mimetype: mediaInfo.mimetype,
-              fileName: `saved_document.${mediaInfo.extension}`
-            });
-          } else if (mediaType === "sticker") {
-            await sock.sendMessage(from, { 
-              sticker: { url: mediaPath }
+          // Download the media
+          const mediaInfo = await downloadMedia({
+            key: {
+              remoteJid: quotedJid,
+              id: quotedMsgId
+            },
+            message: quotedMsg
+          }, fileName);
+          
+          if (mediaInfo) {
+            // Send confirmation
+            await sock.sendMessage(from, { text: `✅ Media saved successfully!` }, { quoted: msg });
+            
+            // Send the media back to the user
+            const mediaType = mediaInfo.messageType;
+            const mediaPath = mediaInfo.filePath;
+            
+            if (mediaType === "image") {
+              await sock.sendMessage(from, { 
+                image: { url: mediaPath },
+                caption: "Here's your saved image!"
+              });
+            } else if (mediaType === "video") {
+              await sock.sendMessage(from, { 
+                video: { url: mediaPath },
+                caption: "Here's your saved video!"
+              });
+            } else if (mediaType === "audio") {
+              await sock.sendMessage(from, { 
+                audio: { url: mediaPath },
+                mimetype: mediaInfo.mimetype
+              });
+            } else if (mediaType === "document") {
+              await sock.sendMessage(from, { 
+                document: { url: mediaPath },
+                mimetype: mediaInfo.mimetype,
+                fileName: `saved_document.${mediaInfo.extension}`
+              });
+            } else if (mediaType === "sticker") {
+              await sock.sendMessage(from, { 
+                sticker: { url: mediaPath }
+              });
+            }
+          } else {
+            await sock.sendMessage(from, { text: "No media found in the message or status!" }, { quoted: msg });
+          }  { text: "No media found in the message or status!" }, { quoted: msg });
+          }
+        }
+
+        // Handle group-specific actions
+        let groupMetadata = null;
+        if (isGroup) {
+          groupMetadata = await sock.groupMetadata(from);
+
+          // Handle commands
+          if (body.startsWith("!")) {
+            const text = body.slice(1);
+            return await handleCommand(sock, msg, from, sender, groupMetadata, text);
+          }
+        }
+
+        // Log message for debugging
+        logger("info", `Message from ${sender.split('@')[0]} in ${isGroup ? 'group' : 'private'}: ${body.substring(0, 50)}${body.length > 50 ? '...' : ''}`);
+      } catch (error) {
+        logger("error", `Error processing message: ${error.message}`);
+      }
+    });
+
+    // Handle group participants update (joins/leaves)
+    sock.ev.on("group-participants.update", async ({ id, participants, action }) => {
+      try {
+        // Get group metadata
+        const groupMetadata = await sock.groupMetadata(id);
+
+        // Handle new participants
+        if (action === "add") {
+          for (const participant of participants) {
+            // Send welcome message
+            sock.sendMessage(id, {
+              text: `👋 Welcome @${participant.split("@")[0]} to ${groupMetadata.subject}!`,
+              mentions: [participant],
             });
           }
-        } else {
-          await sock.sendMessage(from, { text: "No media found in the message or status!" }, { quoted: msg });
         }
-      }
 
-      // Handle group-specific actions
-      let groupMetadata = null;
-      if (isGroup) {
-        groupMetadata = await sock.groupMetadata(from);
-
-        // Handle commands
-        if (body.startsWith("!")) {
-          const text = body.slice(1);
-          return await handleCommand(sock, msg, from, sender, groupMetadata, text);
+        // Handle participants who left
+        if (action === "remove") {
+          for (const participant of participants) {
+            // Send goodbye message
+            sock.sendMessage(id, {
+              text: `👋 @${participant.split("@")[0]} has left the group. Goodbye!`,
+              mentions: [participant],
+            });
+          }
         }
+      } catch (error) {
+        logger("error", `Error handling group update: ${error.message}`);
       }
+    });
 
-      // Log message for debugging
-      logger("info", `Message from ${sender.split('@')[0]} in ${isGroup ? 'group' : 'private'}: ${body.substring(0, 50)}${body.length > 50 ? '...' : ''}`);
-    } catch (error) {
-      logger("error", `Error processing message: ${error.message}`);
-    }
-  });
-
-  // Handle group participants update (joins/leaves)
-  sock.ev.on("group-participants.update", async ({ id, participants, action }) => {
-    try {
-      // Get group metadata
-      const groupMetadata = await sock.groupMetadata(id);
-
-      // Handle new participants
-      if (action === "add") {
-        for (const participant of participants) {
-          // Send welcome message
-          sock.sendMessage(id, {
-            text: `👋 Welcome @${participant.split("@")[0]} to ${groupMetadata.subject}!`,
-            mentions: [participant],
-          });
-        }
-      }
-
-      // Handle participants who left
-      if (action === "remove") {
-        for (const participant of participants) {
-          // Send goodbye message
-          sock.sendMessage(id, {
-            text: `👋 @${participant.split("@")[0]} has left the group. Goodbye!`,
-            mentions: [participant],
-          });
-        }
-      }
-    } catch (error) {
-      logger("error", `Error handling group update: ${error.message}`);
-    }
-  });
-
-  // Expose the sock object for external use
-  return sock;
+    // Return the socket for external use
+    return sock;
+  } catch (error) {
+    logger("error", `Failed to start bot: ${error.message}`);
+    // Attempt to restart after a delay
+    setTimeout(() => {
+      logger("info", "Attempting to restart bot...");
+      startBot();
+    }, 10000);
+  }
 }
 
 // Start the bot
 fancyLog("Starting WhatsApp Bot");
 const botInstance = await startBot();
 
-// Export functions for external use
+// Keep the process alive
+process.on('uncaughtException', (err) => {
+  logger("error", `Uncaught Exception: ${err.message}`);
+  logger("error", err.stack);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  logger("error", 'Unhandled Rejection at:', promise);
+  logger("error", `Reason: ${reason}`);
+});
+
+// Ping the server every 5 minutes to prevent Render from sleeping
+if (isRender) {
+  setInterval(() => {
+    logger("info", "Keeping server alive...");
+    try {
+      fetch(`http://localhost:${PORT}`).catch(() => {});
+    } catch (error) {
+      // Ignore errors
+    }
+  }, 5 * 60 * 1000); // 5 minutes
+}
+
+// Export functions for external use if needed
 export {
   botInstance,
   sendViewOnceMessage
 };
 
-// Example of how to use the view once message feature:
-// To send a view once message, you can call:
-// sendViewOnceMessage(botInstance, "1234567890@s.whatsapp.net", "./path/to/media.jpg", "This will disappear after viewing", "image");
+// Log startup information
+logger("info", `Bot started at ${new Date().toLocaleString()}`);
+logger("info", `Server running at http://localhost:${PORT}`);
+logger("info", "Waiting for WhatsApp connection...");
