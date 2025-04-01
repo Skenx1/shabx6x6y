@@ -8,9 +8,8 @@ const path = require("path")
 // Load environment variables
 dotenv.config()
 
+// Create Express app
 const app = express()
-// We'll keep PORT for local development, but Vercel won't use it
-const PORT = process.env.PORT || 3000
 
 // Middleware - Updated CORS to allow your Firebase domain
 app.use(cors({
@@ -20,13 +19,11 @@ app.use(cors({
 }))
 app.use(bodyParser.json())
 app.use(bodyParser.urlencoded({ extended: true }))
-app.use(express.static(path.join(__dirname, "public")))
 
 // Verify Paystack secret key is available
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY
 if (!PAYSTACK_SECRET_KEY) {
   console.warn("PAYSTACK_SECRET_KEY is not set in environment variables")
-  // Don't exit the process on Vercel
 }
 
 // Helper function to make Paystack API requests
@@ -71,6 +68,14 @@ function paystackRequest(method, path, data = null) {
     req.end()
   })
 }
+
+// Root endpoint - IMPORTANT for Vercel to recognize the app is working
+app.get("/", (req, res) => {
+  res.status(200).json({
+    status: true,
+    message: "GamerzHub API server is running. Frontend is at https://gamerzhubgh.web.app"
+  })
+})
 
 // Initialize payment
 app.post("/api/payment/initialize", async (req, res) => {
@@ -170,21 +175,10 @@ app.get("/api/health", (req, res) => {
   res.status(200).json({ status: "ok", message: "Server is running" })
 })
 
-// Root endpoint for basic info
-app.get("/", (req, res) => {
-  res.status(200).json({
-    status: true,
-    message: "GamerzHub API server is running. Frontend is at https://gamerzhubgh.web.app"
-  })
+// Test endpoint
+app.get("/test", (req, res) => {
+  res.status(200).send("Server is working!")
 })
-
-// IMPORTANT: REMOVE THIS FOR VERCEL DEPLOYMENT
-// This section is only for local development
-if (process.env.NODE_ENV !== 'production') {
-  app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`)
-  })
-}
 
 // Handle uncaught exceptions
 process.on("uncaughtException", (error) => {
@@ -196,5 +190,13 @@ process.on("unhandledRejection", (reason, promise) => {
   console.error("Unhandled Rejection at:", promise, "reason:", reason)
 })
 
-// Export the Express app for Vercel
+// For local development only
+if (process.env.NODE_ENV !== 'production') {
+  const PORT = process.env.PORT || 3000
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`)
+  })
+}
+
+// CRITICAL: Export the Express app for Vercel
 module.exports = app
