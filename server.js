@@ -11,9 +11,19 @@ dotenv.config()
 // Create Express app
 const app = express()
 
-// Middleware - Updated CORS to allow all origins during development
+// Vercel deployment URL
+const VERCEL_URL = "https://gamerzhub-44wgkym8b-ghoodbhardshabs-gmailcoms-projects.vercel.app"
+const FIREBASE_URL = "https://gamerzhubgh.web.app"
+
+// Middleware - Updated CORS to include Vercel deployment URL
 app.use(cors({
-  origin: ['https://gamerzhubgh.web.app', 'https://gamerzhubgh.firebaseapp.com', 'http://localhost:3000', '*'],
+  origin: [
+    FIREBASE_URL, 
+    'https://gamerzhubgh.firebaseapp.com', 
+    'http://localhost:3000',
+    VERCEL_URL,
+    '*'
+  ],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   credentials: true
 }))
@@ -73,13 +83,21 @@ function paystackRequest(method, path, data = null) {
 app.get("/", (req, res) => {
   res.status(200).json({
     status: true,
-    message: "GamerzHub API server is running. Frontend is at https://gamerzhubgh.web.app"
+    message: "GamerzHub API server is running.",
+    firebase_frontend: FIREBASE_URL,
+    vercel_deployment: VERCEL_URL,
+    timestamp: new Date().toISOString()
   })
 })
 
 // Initialize payment
 app.post("/api/payment/initialize", async (req, res) => {
   try {
+    // Add CORS headers explicitly for this endpoint
+    res.header("Access-Control-Allow-Origin", "*")
+    res.header("Access-Control-Allow-Methods", "POST, OPTIONS")
+    res.header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
     const { email, amount, metadata, tournamentId, registrationId } = req.body
 
     if (!email || !amount) {
@@ -93,7 +111,7 @@ app.post("/api/payment/initialize", async (req, res) => {
     const amountInPesewa = Math.floor(Number.parseFloat(amount) * 100)
 
     // Use Firebase URL for callback
-    const baseUrl = "https://gamerzhubgh.web.app"
+    const baseUrl = FIREBASE_URL
 
     // Construct callback URL with all necessary parameters
     const callbackUrl = `${baseUrl}/payment-callback.html?tournamentId=${tournamentId || ""}&registrationId=${registrationId || ""}`
@@ -130,6 +148,11 @@ app.post("/api/payment/initialize", async (req, res) => {
 // Verify payment
 app.get("/api/payment/verify", async (req, res) => {
   try {
+    // Add CORS headers explicitly for this endpoint
+    res.header("Access-Control-Allow-Origin", "*")
+    res.header("Access-Control-Allow-Methods", "GET, OPTIONS")
+    res.header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
     const { reference } = req.query
 
     if (!reference) {
@@ -150,11 +173,6 @@ app.get("/api/payment/verify", async (req, res) => {
       reference: response.data?.reference,
     })
 
-    // Add CORS headers explicitly for this endpoint
-    res.header("Access-Control-Allow-Origin", "*")
-    res.header("Access-Control-Allow-Methods", "GET, OPTIONS")
-    res.header("Access-Control-Allow-Headers", "Content-Type, Authorization")
-
     return res.status(200).json(response)
   } catch (error) {
     console.error("Payment verification error:", error)
@@ -171,11 +189,13 @@ app.get("/api/check-connection", (req, res) => {
   // Add CORS headers explicitly for this endpoint
   res.header("Access-Control-Allow-Origin", "*")
   res.header("Access-Control-Allow-Methods", "GET, OPTIONS")
+  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization")
   
   res.status(200).json({
     status: true,
     message: "Server is connected to GamerzHub frontend",
-    frontend: "https://gamerzhubgh.web.app",
+    firebase_frontend: FIREBASE_URL,
+    vercel_deployment: VERCEL_URL,
     timestamp: new Date().toISOString()
   })
 })
@@ -195,7 +215,12 @@ app.get("/test", (req, res) => {
 })
 
 // Handle preflight OPTIONS requests
-app.options("*", cors())
+app.options("*", (req, res) => {
+  res.header("Access-Control-Allow-Origin", "*")
+  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+  res.status(200).send()
+})
 
 // Handle uncaught exceptions
 process.on("uncaughtException", (error) => {
