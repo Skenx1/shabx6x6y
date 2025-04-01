@@ -8,32 +8,23 @@ const path = require("path")
 // Load environment variables
 dotenv.config()
 
-// Create Express app
 const app = express()
+const PORT = process.env.PORT || 3000
 
-// Vercel deployment URL
-const VERCEL_URL = "https://gamerzhub-44wgkym8b-ghoodbhardshabs-gmailcoms-projects.vercel.app"
-const FIREBASE_URL = "https://gamerzhubgh.web.app"
-
-// Middleware - Updated CORS to include Vercel deployment URL
-app.use(cors({
-  origin: [
-    FIREBASE_URL, 
-    'https://gamerzhubgh.firebaseapp.com', 
-    'http://localhost:3000',
-    VERCEL_URL,
-    '*'
-  ],
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  credentials: true
-}))
+// Middleware - Using simple CORS setup since it works for you
+app.use(cors())
 app.use(bodyParser.json())
 app.use(bodyParser.urlencoded({ extended: true }))
+app.use(express.static(path.join(__dirname, "public")))
 
 // Verify Paystack secret key is available
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY
 if (!PAYSTACK_SECRET_KEY) {
-  console.warn("PAYSTACK_SECRET_KEY is not set in environment variables")
+  console.error("PAYSTACK_SECRET_KEY is not set in environment variables")
+  // Don't exit in production as Vercel might inject the env var after this check
+  if (process.env.NODE_ENV !== 'production') {
+    process.exit(1)
+  }
 }
 
 // Helper function to make Paystack API requests
@@ -79,25 +70,9 @@ function paystackRequest(method, path, data = null) {
   })
 }
 
-// Root endpoint - IMPORTANT for Vercel to recognize the app is working
-app.get("/", (req, res) => {
-  res.status(200).json({
-    status: true,
-    message: "GamerzHub API server is running.",
-    firebase_frontend: FIREBASE_URL,
-    vercel_deployment: VERCEL_URL,
-    timestamp: new Date().toISOString()
-  })
-})
-
 // Initialize payment
 app.post("/api/payment/initialize", async (req, res) => {
   try {
-    // Add CORS headers explicitly for this endpoint
-    res.header("Access-Control-Allow-Origin", "*")
-    res.header("Access-Control-Allow-Methods", "POST, OPTIONS")
-    res.header("Access-Control-Allow-Headers", "Content-Type, Authorization")
-
     const { email, amount, metadata, tournamentId, registrationId } = req.body
 
     if (!email || !amount) {
@@ -110,11 +85,15 @@ app.post("/api/payment/initialize", async (req, res) => {
     // Convert amount to pesewa (Paystack uses pesewa for GHS, which is 1/100 of a Cedi)
     const amountInPesewa = Math.floor(Number.parseFloat(amount) * 100)
 
-    // Use Firebase URL for callback
-    const baseUrl = FIREBASE_URL
+    // Get the host from the request
+    const host = req.headers.host
+    const protocol = req.headers["x-forwarded-proto"] || "http"
+    const baseUrl = `${protocol}://${host}`
 
-    // Construct callback URL with all necessary parameters
-    const callbackUrl = `${baseUrl}/payment-callback.html?tournamentId=${tournamentId || ""}&registrationId=${registrationId || ""}`
+    // For Vercel deployment, we need to use the Firebase URL for callback
+    // as the Vercel URL might not have the HTML files
+    const callbackUrl = "https://gamerzhubgh.web.app/payment-callback.html" + 
+                       `?tournamentId=${tournamentId || ""}&registrationId=${registrationId || ""}`
 
     const paymentData = {
       email,
@@ -148,11 +127,6 @@ app.post("/api/payment/initialize", async (req, res) => {
 // Verify payment
 app.get("/api/payment/verify", async (req, res) => {
   try {
-    // Add CORS headers explicitly for this endpoint
-    res.header("Access-Control-Allow-Origin", "*")
-    res.header("Access-Control-Allow-Methods", "GET, OPTIONS")
-    res.header("Access-Control-Allow-Headers", "Content-Type, Authorization")
-
     const { reference } = req.query
 
     if (!reference) {
@@ -164,7 +138,7 @@ app.get("/api/payment/verify", async (req, res) => {
 
     console.log("Verifying payment with reference:", reference)
 
-    const response = await paystackRequest("GET", `/transaction/verify/${encodeURIComponent(reference)}`)
+    const response = await paystackRequest("GET", `/transaction/verify/${reference}`)
 
     console.log("Payment verification response:", {
       status: response.status,
@@ -186,41 +160,36 @@ app.get("/api/payment/verify", async (req, res) => {
 
 // API endpoint to check if server is connected to Firebase frontend
 app.get("/api/check-connection", (req, res) => {
-  // Add CORS headers explicitly for this endpoint
-  res.header("Access-Control-Allow-Origin", "*")
-  res.header("Access-Control-Allow-Methods", "GET, OPTIONS")
-  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization")
-  
   res.status(200).json({
     status: true,
     message: "Server is connected to GamerzHub frontend",
-    firebase_frontend: FIREBASE_URL,
-    vercel_deployment: VERCEL_URL,
+    frontend: "https://gamerzhubgh.web.app",
+    server: req.headers.host,
+    timestamp: new Date().toISOString()
+  })
+})
+
+// Serve HTML files
+app.get("/", (req, res) => {
+  res.status(200).json({
+    status: true,
+    message: "GamerzHub API server is running",
+    version: "1.0.2",
     timestamp: new Date().toISOString()
   })
 })
 
 // Health check endpoint
 app.get("/api/health", (req, res) => {
-  res.status(200).json({ 
-    status: "ok", 
-    message: "Server is running",
-    timestamp: new Date().toISOString()
+  res.status(200).json({ status: "ok", message: "Server is running" })
+})
+
+// Start server (only for local development)
+if (process.env.NODE_ENV !== 'production') {
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`)
   })
-})
-
-// Test endpoint
-app.get("/test", (req, res) => {
-  res.status(200).send("Server is working!")
-})
-
-// Handle preflight OPTIONS requests
-app.options("*", (req, res) => {
-  res.header("Access-Control-Allow-Origin", "*")
-  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization")
-  res.status(200).send()
-})
+}
 
 // Handle uncaught exceptions
 process.on("uncaughtException", (error) => {
@@ -232,13 +201,5 @@ process.on("unhandledRejection", (reason, promise) => {
   console.error("Unhandled Rejection at:", promise, "reason:", reason)
 })
 
-// For local development only
-if (process.env.NODE_ENV !== 'production') {
-  const PORT = process.env.PORT || 3000
-  app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`)
-  })
-}
-
-// CRITICAL: Export the Express app for Vercel
+// Export for Vercel
 module.exports = app
