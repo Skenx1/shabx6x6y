@@ -11,9 +11,9 @@ dotenv.config()
 // Create Express app
 const app = express()
 
-// Middleware - Updated CORS to allow your Firebase domain
+// Middleware - Updated CORS to allow all origins during development
 app.use(cors({
-  origin: ['https://gamerzhubgh.web.app', 'https://gamerzhubgh.firebaseapp.com', 'http://localhost:3000'],
+  origin: ['https://gamerzhubgh.web.app', 'https://gamerzhubgh.firebaseapp.com', 'http://localhost:3000', '*'],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   credentials: true
 }))
@@ -141,7 +141,7 @@ app.get("/api/payment/verify", async (req, res) => {
 
     console.log("Verifying payment with reference:", reference)
 
-    const response = await paystackRequest("GET", `/transaction/verify/${reference}`)
+    const response = await paystackRequest("GET", `/transaction/verify/${encodeURIComponent(reference)}`)
 
     console.log("Payment verification response:", {
       status: response.status,
@@ -149,6 +149,11 @@ app.get("/api/payment/verify", async (req, res) => {
       amount: response.data?.amount ? `${response.data.amount / 100} GHS` : "N/A",
       reference: response.data?.reference,
     })
+
+    // Add CORS headers explicitly for this endpoint
+    res.header("Access-Control-Allow-Origin", "*")
+    res.header("Access-Control-Allow-Methods", "GET, OPTIONS")
+    res.header("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
     return res.status(200).json(response)
   } catch (error) {
@@ -163,22 +168,34 @@ app.get("/api/payment/verify", async (req, res) => {
 
 // API endpoint to check if server is connected to Firebase frontend
 app.get("/api/check-connection", (req, res) => {
+  // Add CORS headers explicitly for this endpoint
+  res.header("Access-Control-Allow-Origin", "*")
+  res.header("Access-Control-Allow-Methods", "GET, OPTIONS")
+  
   res.status(200).json({
     status: true,
     message: "Server is connected to GamerzHub frontend",
-    frontend: "https://gamerzhubgh.web.app"
+    frontend: "https://gamerzhubgh.web.app",
+    timestamp: new Date().toISOString()
   })
 })
 
 // Health check endpoint
 app.get("/api/health", (req, res) => {
-  res.status(200).json({ status: "ok", message: "Server is running" })
+  res.status(200).json({ 
+    status: "ok", 
+    message: "Server is running",
+    timestamp: new Date().toISOString()
+  })
 })
 
 // Test endpoint
 app.get("/test", (req, res) => {
   res.status(200).send("Server is working!")
 })
+
+// Handle preflight OPTIONS requests
+app.options("*", cors())
 
 // Handle uncaught exceptions
 process.on("uncaughtException", (error) => {
