@@ -9,6 +9,7 @@ const path = require("path")
 dotenv.config()
 
 const app = express()
+// We'll keep PORT for local development, but Vercel won't use it
 const PORT = process.env.PORT || 3000
 
 // Middleware
@@ -20,8 +21,9 @@ app.use(express.static(path.join(__dirname, "public")))
 // Verify Paystack secret key is available
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY
 if (!PAYSTACK_SECRET_KEY) {
-  console.error("PAYSTACK_SECRET_KEY is not set in environment variables")
-  process.exit(1)
+  console.warn("PAYSTACK_SECRET_KEY is not set in environment variables")
+  // Don't exit the process on Vercel
+  // process.exit(1) - REMOVED THIS LINE
 }
 
 // Helper function to make Paystack API requests
@@ -82,10 +84,12 @@ app.post("/api/payment/initialize", async (req, res) => {
     // Convert amount to pesewa (Paystack uses pesewa for GHS, which is 1/100 of a Cedi)
     const amountInPesewa = Math.floor(Number.parseFloat(amount) * 100)
 
-    // Get the host from the request
+    // Get the host from the request - UPDATED FOR VERCEL
     const host = req.headers.host
-    const protocol = req.headers["x-forwarded-proto"] || "http"
-    const baseUrl = `${protocol}://${host}`
+    const protocol = process.env.VERCEL_URL ? "https" : (req.headers["x-forwarded-proto"] || "http")
+    const baseUrl = process.env.VERCEL_URL 
+      ? `https://${process.env.VERCEL_URL}` 
+      : `${protocol}://${host}`
 
     // Construct callback URL with all necessary parameters
     const callbackUrl = `${baseUrl}/payment-callback.html?tournamentId=${tournamentId || ""}&registrationId=${registrationId || ""}`
@@ -167,10 +171,18 @@ app.get("/api/health", (req, res) => {
   res.status(200).json({ status: "ok", message: "Server is running" })
 })
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`)
+// Test endpoint to verify the API is working
+app.get("/test", (req, res) => {
+  res.status(200).json({ message: "API is working!" })
 })
+
+// IMPORTANT: REMOVE THIS FOR VERCEL DEPLOYMENT
+// This section is only for local development
+if (process.env.NODE_ENV !== 'production') {
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`)
+  })
+}
 
 // Handle uncaught exceptions
 process.on("uncaughtException", (error) => {
@@ -182,5 +194,5 @@ process.on("unhandledRejection", (reason, promise) => {
   console.error("Unhandled Rejection at:", promise, "reason:", reason)
 })
 
+// Export the Express app for Vercel
 module.exports = app
-
