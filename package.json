@@ -1,7 +1,7 @@
 {
-  "name": "paystack-payment-server",
+  "name": "gamerzhub-payment-server",
   "version": "1.0.0",
-  "description": "Express server for Paystack payment processing",
+  "description": "Payment processing server for GamerzHub tournaments",
   "main": "server.js",
   "dependencies": {
     "express": "^4.18.2",
