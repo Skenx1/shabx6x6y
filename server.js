@@ -12,8 +12,12 @@ const app = express()
 // We'll keep PORT for local development, but Vercel won't use it
 const PORT = process.env.PORT || 3000
 
-// Middleware
-app.use(cors())
+// Middleware - Updated CORS to allow your Firebase domain
+app.use(cors({
+  origin: ['https://gamerzhubgh.web.app', 'https://gamerzhubgh.firebaseapp.com', 'http://localhost:3000'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  credentials: true
+}))
 app.use(bodyParser.json())
 app.use(bodyParser.urlencoded({ extended: true }))
 app.use(express.static(path.join(__dirname, "public")))
@@ -23,7 +27,6 @@ const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY
 if (!PAYSTACK_SECRET_KEY) {
   console.warn("PAYSTACK_SECRET_KEY is not set in environment variables")
   // Don't exit the process on Vercel
-  // process.exit(1) - REMOVED THIS LINE
 }
 
 // Helper function to make Paystack API requests
@@ -84,12 +87,8 @@ app.post("/api/payment/initialize", async (req, res) => {
     // Convert amount to pesewa (Paystack uses pesewa for GHS, which is 1/100 of a Cedi)
     const amountInPesewa = Math.floor(Number.parseFloat(amount) * 100)
 
-    // Get the host from the request - UPDATED FOR VERCEL
-    const host = req.headers.host
-    const protocol = process.env.VERCEL_URL ? "https" : (req.headers["x-forwarded-proto"] || "http")
-    const baseUrl = process.env.VERCEL_URL 
-      ? `https://${process.env.VERCEL_URL}` 
-      : `${protocol}://${host}`
+    // Use Firebase URL for callback
+    const baseUrl = "https://gamerzhubgh.web.app"
 
     // Construct callback URL with all necessary parameters
     const callbackUrl = `${baseUrl}/payment-callback.html?tournamentId=${tournamentId || ""}&registrationId=${registrationId || ""}`
@@ -157,13 +156,13 @@ app.get("/api/payment/verify", async (req, res) => {
   }
 })
 
-// Serve HTML files
-app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "index.html"))
-})
-
-app.get("/admin", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "admin.html"))
+// API endpoint to check if server is connected to Firebase frontend
+app.get("/api/check-connection", (req, res) => {
+  res.status(200).json({
+    status: true,
+    message: "Server is connected to GamerzHub frontend",
+    frontend: "https://gamerzhubgh.web.app"
+  })
 })
 
 // Health check endpoint
@@ -171,9 +170,12 @@ app.get("/api/health", (req, res) => {
   res.status(200).json({ status: "ok", message: "Server is running" })
 })
 
-// Test endpoint to verify the API is working
-app.get("/test", (req, res) => {
-  res.status(200).json({ message: "API is working!" })
+// Root endpoint for basic info
+app.get("/", (req, res) => {
+  res.status(200).json({
+    status: true,
+    message: "GamerzHub API server is running. Frontend is at https://gamerzhubgh.web.app"
+  })
 })
 
 // IMPORTANT: REMOVE THIS FOR VERCEL DEPLOYMENT
